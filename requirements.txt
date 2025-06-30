@@ -1,0 +1,43 @@
+# Core UI and LangChain/LangGraph foundational libraries
+gradio
+langchain-core
+langchain # For text splitters and other utilities
+
+# LangGraph for graph-based workflows (currently outlined, not compiled)
+# langgraph
+
+# RAG specific dependencies
+faiss-cpu
+sentence-transformers # For HuggingFaceEmbeddings
+
+# Standard library 'typing' is used but doesn't need to be listed here.
+
+# Add other core libraries as they become hard dependencies, for example:
+# For specific LLMs:
+# langchain-openai
+# langchain-anthropic
+# langchain-google-genai
+
+# For document loading and parsing (if not covered by core/community):
+# pypdf2 # For PDF handling if AnnualReportLoader implements it
+# beautifulsoup4 # For HTML parsing if needed
+# unstructured # For general document parsing
+
+# For data manipulation if complex DataFrames are used:
+# pandas
+
+# For alternative vector stores if using RAG:
+# chromadb
+
+# Testing (optional to include here, often in a dev-requirements.txt)
+# pytest
+# unittest # (standard library)
+# coverage
+# pytest-cov
+# mock
+# unittest-mock # (if using older python for unittest.mock)
+# flake8 # for linting
+# mypy # for type checking
+# black # for code formatting
+# isort # for import sorting
+# pre-commit # for git hooks

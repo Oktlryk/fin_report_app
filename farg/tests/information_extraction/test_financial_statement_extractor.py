@@ -1,133 +1,136 @@
 import unittest
 import os
+from unittest.mock import MagicMock
+from langchain_core.documents import Document # For creating mock search results
 
 try:
-    from farg.information_extraction.financial_statement_extractor import FinancialStatementExtractor, FinancialStatementExtractionState
+    from farg.information_extraction.financial_statement_extractor import FinancialStatementExtractor, FinancialStatementExtractionState, PlaceholderFSLLM
 except ImportError:
     import sys
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
-    from farg.information_extraction.financial_statement_extractor import FinancialStatementExtractor, FinancialStatementExtractionState
+    from farg.information_extraction.financial_statement_extractor import FinancialStatementExtractor, FinancialStatementExtractionState, PlaceholderFSLLM
 
-class TestFinancialStatementExtractorLangGraph(unittest.TestCase): # Renamed for clarity
+class TestFinancialStatementExtractorRAGLangGraph(unittest.TestCase): # Renamed
     """
-    Unit tests for the FinancialStatementExtractor class with LangGraph outline.
+    Unit tests for the FinancialStatementExtractor class with RAG and LangGraph outline.
     """
 
     def setUp(self):
-        """Initialize the extractor for each test."""
+        """Initialize the extractor and mock search function for each test."""
         self.extractor = FinancialStatementExtractor()
+        self.mock_vector_search_fn = MagicMock()
+
         self.sample_parsed_data = {
-            "text": "Report text including Income Statement: Revenue $1M... and a Balance Sheet: Assets $5M...",
-            "parsed_sections": {"overview": "Some overview text", "financials_text": "More detailed financials"}
+            "text": "Comprehensive annual report including income statement, balance sheet, and cash flow details...",
+            # other parsed data like tables or pre-segmented sections could go here
         }
-        self.multi_section_text = (
-            "Section 1: Intro.\n\n"
-            "Section 2: Consolidated income statement of the company.\n\n"
-            "Section 3: Details about assets on the balance sheet.\n\n"
-            "Section 4: Cash flow from operations was positive.\n\n"
-            "Section 5: Other notes."
-        )
 
     def test_import_and_instantiation(self):
         """Test that FinancialStatementExtractor can be imported and instantiated."""
         self.assertIsInstance(self.extractor, FinancialStatementExtractor)
-        # Check if the (commented out) app is None initially, or if simulation runs, it's fine
-        self.assertIsNone(self.extractor.app, "LangGraph app should be None as it's commented out or failed compilation.")
+        self.assertIsInstance(self.extractor.llm, PlaceholderFSLLM)
+        self.assertIsNone(self.extractor.app, "LangGraph app should be None as it's commented out.")
 
     def test_graph_related_methods_exist(self):
         """Test that new graph-related methods are defined."""
-        self.assertTrue(hasattr(self.extractor, 'start_extraction_node'), "Method start_extraction_node should exist.")
-        self.assertTrue(hasattr(self.extractor, 'extract_section_node'), "Method extract_section_node should exist.")
-        self.assertTrue(hasattr(self.extractor, 'should_continue_extraction_edge'), "Method should_continue_extraction_edge should exist.")
+        self.assertTrue(hasattr(self.extractor, 'start_extraction_node'))
+        self.assertTrue(hasattr(self.extractor, 'extract_single_statement_node')) # Updated node name
+        self.assertTrue(hasattr(self.extractor, 'should_continue_statement_type_edge')) # Updated edge name
 
-    def test_extract_financial_statements_returns_modified_placeholder(self):
-        """Test that extract_financial_statements returns the new placeholder structure."""
-        result = self.extractor.extract_financial_statements(self.sample_parsed_data)
+    def test_extract_financial_statements_uses_rag_and_returns_structure(self):
+        """Test that extract_financial_statements uses RAG (via search_fn) and returns the expected structure."""
+
+        # Mock search results for different statement types
+        def mock_search_side_effect(query, k):
+            if "income statement" in query.lower():
+                return [(Document(page_content="Retrieved text about revenues and expenses.", metadata={"source": "doc1"}), 0.9)]
+            elif "balance sheet" in query.lower():
+                return [(Document(page_content="Retrieved text detailing assets and liabilities.", metadata={"source": "doc2"}), 0.88)]
+            elif "cash flow" in query.lower():
+                return [(Document(page_content="Retrieved text on cash from operations.", metadata={"source": "doc3"}), 0.85)]
+            return []
+        self.mock_vector_search_fn.side_effect = mock_search_side_effect
+
+        result = self.extractor.extract_financial_statements(self.sample_parsed_data, self.mock_vector_search_fn)
+
         self.assertIsInstance(result, dict)
-
         expected_keys = ["income_statement", "balance_sheet", "cash_flow_statement", "notes_to_financial_statements", "graph_simulation_errors"]
         for key in expected_keys:
             self.assertIn(key, result, f"Key '{key}' not found in extraction result.")
 
-        # Check if the placeholder text indicates LangGraph simulation
-        if self.extractor.app is None: # If graph wasn't "compiled"
-            self.assertTrue("LangGraph app not compiled" in result["income_statement"])
-        else: # If graph simulation ran because self.app was mocked or somehow non-None
-             self.assertTrue("LangGraph (simulated run)" in result["income_statement"])
+        # Check if output from PlaceholderFSLLM (which simulates RAG processing) is present
+        self.assertTrue("Extracted Income Statement from context" in result["income_statement"])
+        self.assertTrue("Extracted Balance Sheet from context" in result["balance_sheet"])
+        self.assertTrue("Extracted Cash Flow from context" in result["cash_flow_statement"])
 
+        # Ensure search_fn was called for each statement type
+        self.assertEqual(self.mock_vector_search_fn.call_count, 3) # For income, balance, cash flow
 
-    def test_extract_financial_statements_invalid_input(self):
-        """Test that the method still raises TypeError for invalid input."""
-        with self.assertRaises(TypeError):
-            self.extractor.extract_financial_statements("not_a_dict") # type: ignore
-        with self.assertRaises(TypeError):
-            self.extractor.extract_financial_statements(None) # type: ignore
+    def test_extract_financial_statements_no_search_fn_fallback(self):
+        """Test fallback behavior when no vector_store_search_fn is provided."""
+        result = self.extractor.extract_financial_statements(self.sample_parsed_data, None)
+        self.assertIn("RAG search function not provided", result["income_statement"])
+        self.assertIn("vector_store_search_fn was None", result["graph_simulation_errors"])
 
-    def test_start_extraction_node_initializes_state_correctly(self):
+    def test_start_extraction_node_initializes_state(self):
         """Test the start_extraction_node logic."""
+        # Provide all necessary keys for FinancialStatementExtractionState, even if some are None or empty for this test
         initial_state_input: FinancialStatementExtractionState = {
-            "report_sections": ["section1"],
-            "extracted_statements": {"old_data": "should_be_cleared"}, # type: ignore
-            "current_section_index": 5, # Should be reset
+            "parsed_report_data": self.sample_parsed_data,
+            "vector_store_search_fn": self.mock_vector_search_fn,
+            "statement_types_to_extract": [], # Should be set by node
+            "current_statement_type_index": 10, # Should be reset
+            "extracted_statements": {"old": "data"}, # Should be cleared
             "errors": ["old_error"] # Should be cleared
         }
         processed_state = self.extractor.start_extraction_node(initial_state_input)
         self.assertEqual(processed_state["extracted_statements"], {})
         self.assertEqual(processed_state["errors"], [])
-        self.assertEqual(processed_state["current_section_index"], 0)
+        self.assertEqual(processed_state["current_statement_type_index"], 0)
+        self.assertEqual(processed_state["statement_types_to_extract"], ["income_statement", "balance_sheet", "cash_flow_statement"])
 
-    def test_should_continue_extraction_edge_logic(self):
-        """Test the logic of the conditional edge function."""
-        state_continue: FinancialStatementExtractionState = {"report_sections": ["s1", "s2"], "current_section_index": 0, "extracted_statements": {}, "errors": []}
-        self.assertEqual(self.extractor.should_continue_extraction_edge(state_continue), "extract_next_section")
+    def test_should_continue_statement_type_edge_logic(self):
+        """Test the conditional edge logic for statement types."""
+        state_base: FinancialStatementExtractionState = {
+            "parsed_report_data": {}, "vector_store_search_fn": self.mock_vector_search_fn,
+            "statement_types_to_extract": ["s1", "s2"], "extracted_statements": {}, "errors": []
+        }
 
-        state_continue_last: FinancialStatementExtractionState = {"report_sections": ["s1", "s2"], "current_section_index": 1, "extracted_statements": {}, "errors": []}
-        self.assertEqual(self.extractor.should_continue_extraction_edge(state_continue_last), "extract_next_section")
+        state_continue = state_base.copy()
+        state_continue["current_statement_type_index"] = 0
+        self.assertEqual(self.extractor.should_continue_statement_type_edge(state_continue), "extract_next_statement_type")
 
-        state_end: FinancialStatementExtractionState = {"report_sections": ["s1", "s2"], "current_section_index": 2, "extracted_statements": {}, "errors": []}
-        self.assertEqual(self.extractor.should_continue_extraction_edge(state_end), "end_extraction")
+        state_last = state_base.copy()
+        state_last["current_statement_type_index"] = 1
+        self.assertEqual(self.extractor.should_continue_statement_type_edge(state_last), "extract_next_statement_type")
 
-        state_empty_sections: FinancialStatementExtractionState = {"report_sections": [], "current_section_index": 0, "extracted_statements": {}, "errors": []}
-        self.assertEqual(self.extractor.should_continue_extraction_edge(state_empty_sections), "end_extraction")
+        state_end = state_base.copy()
+        state_end["current_statement_type_index"] = 2
+        self.assertEqual(self.extractor.should_continue_statement_type_edge(state_end), "END")
 
 
-    def test_extract_section_node_simulated_logic(self):
-        """Test the simulated processing within extract_section_node."""
-        state_income: FinancialStatementExtractionState = {
-            "report_sections": ["This section is an income statement."],
-            "current_section_index": 0,
+    def test_extract_single_statement_node_simulated_rag_logic(self):
+        """Test the RAG simulation within extract_single_statement_node."""
+        self.mock_vector_search_fn.return_value = [
+            (Document(page_content="Relevant text for income statement.", metadata={"source": "doc_a"}), 0.9)
+        ]
+
+        state_before: FinancialStatementExtractionState = {
+            "parsed_report_data": self.sample_parsed_data,
+            "vector_store_search_fn": self.mock_vector_search_fn,
+            "statement_types_to_extract": ["income_statement", "balance_sheet"],
+            "current_statement_type_index": 0,
             "extracted_statements": {},
             "errors": []
         }
-        processed_state = self.extractor.extract_section_node(state_income)
+
+        processed_state = self.extractor.extract_single_statement_node(state_before)
+
+        self.mock_vector_search_fn.assert_called_once_with(query="Retrieve text sections related to the income statement.", k=3)
         self.assertIn("income_statement", processed_state["extracted_statements"])
-        self.assertTrue("Identified as Income Statement" in processed_state["extracted_statements"]["income_statement"])
-        self.assertEqual(processed_state["current_section_index"], 1)
+        self.assertTrue("Extracted Income Statement from context" in processed_state["extracted_statements"]["income_statement"])
+        self.assertEqual(processed_state["current_statement_type_index"], 1)
         self.assertEqual(len(processed_state["errors"]), 0)
-
-        state_balance: FinancialStatementExtractionState = {
-            "report_sections": ["Text about the balance sheet of the company."],
-            "current_section_index": 0,
-            "extracted_statements": {},
-            "errors": []
-        }
-        processed_state_b = self.extractor.extract_section_node(state_balance)
-        self.assertIn("balance_sheet", processed_state_b["extracted_statements"])
-        self.assertTrue("Identified as Balance Sheet" in processed_state_b["extracted_statements"]["balance_sheet"])
-
-    def test_simulated_graph_run_in_extract_financial_statements(self):
-        """ Test the full simulated graph execution path within extract_financial_statements """
-        parsed_data = {"text": self.multi_section_text}
-        result = self.extractor.extract_financial_statements(parsed_data)
-
-        self.assertIn("income_statement", result)
-        self.assertTrue("Identified as Income Statement" in result["income_statement"])
-        self.assertIn("balance_sheet", result)
-        self.assertTrue("Identified as Balance Sheet" in result["balance_sheet"])
-        self.assertIn("cash_flow_statement", result)
-        self.assertTrue("Identified as Cash Flow Statement" in result["cash_flow_statement"])
-        self.assertEqual(len(result["graph_simulation_errors"]), 0)
-
 
 if __name__ == '__main__':
     unittest.main()

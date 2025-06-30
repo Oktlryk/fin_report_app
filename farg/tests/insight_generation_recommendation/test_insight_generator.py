@@ -1,61 +1,108 @@
 import unittest
 import os
+from unittest.mock import MagicMock
+from langchain_core.documents import Document # For mock search results
 
 try:
-    from farg.insight_generation_recommendation.insight_generator import InsightGenerator
+    from farg.insight_generation_recommendation.insight_generator import InsightGenerator, PlaceholderInsightRAGLLM
 except ImportError:
     import sys
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
-    from farg.insight_generation_recommendation.insight_generator import InsightGenerator
+    from farg.insight_generation_recommendation.insight_generator import InsightGenerator, PlaceholderInsightRAGLLM
 
-class TestInsightGenerator(unittest.TestCase):
+class TestInsightGeneratorRAG(unittest.TestCase): # Renamed
     """
-    Unit tests for the InsightGenerator class.
+    Unit tests for the InsightGenerator class with RAG integration.
     """
 
     def setUp(self):
-        """Initialize the generator for each test."""
+        """Initialize the generator and mock search function for each test."""
         self.generator = InsightGenerator()
-        self.sample_financial_analysis = {"ratios": {"npm": 0.1}, "trends": {"revenue": "up"}}
-        self.sample_competitor_analysis = {"comparison": "on_par"}
-        self.sample_swot = {"strengths": ["S1"], "weaknesses": ["W1"], "opportunities": ["O1"], "threats": ["T1"]}
+        self.mock_vector_search_fn = MagicMock()
 
-    def test_import_insight_generator(self):
+        self.sample_financial_analysis = {
+            "trends": {"revenue_trend": "upward (strong)"},
+            "ratios": {"profitability_ratios": {"net_profit_margin": 0.15, "net_profit_margin_context": "Context for NPM..."}}
+        }
+        self.sample_competitor_analysis = {"overall_comparison_summary": "On par with Competitor X."}
+        self.sample_swot = {"opportunities": ["New market segment Alpha", "Partnership with TechCorp"]}
+
+    def test_import_and_instantiation(self):
         """Test that InsightGenerator can be imported and instantiated."""
         self.assertIsInstance(self.generator, InsightGenerator)
+        self.assertIsInstance(self.generator.llm, PlaceholderInsightRAGLLM)
 
-    def test_generate_insights_returns_list_of_strings(self):
-        """Test that generate_insights returns a list of strings."""
+
+    def test_generate_insights_with_rag_uses_search_fn(self):
+        """Test that generate_insights uses vector_store_search_fn when provided."""
+
+        def mock_search_side_effect(query, k):
+            if "revenue trend" in query.lower():
+                return [(Document(page_content="Company attributes growth to new product line.", metadata={"source":"s1"}), 0.9)]
+            if "New market segment Alpha" in query: # Matches the first opportunity
+                return [(Document(page_content="Segment Alpha shows 25% YoY growth potential.", metadata={"source":"s2"}), 0.88)]
+            return []
+        self.mock_vector_search_fn.side_effect = mock_search_side_effect
+
         result = self.generator.generate_insights(
-            self.sample_financial_analysis, self.sample_competitor_analysis, self.sample_swot
+            self.sample_financial_analysis,
+            self.sample_competitor_analysis,
+            self.sample_swot,
+            vector_store_search_fn=self.mock_vector_search_fn
+        )
+
+        self.assertIsInstance(result, list)
+        self.assertTrue(any("Insight (RAG):" in item for item in result), "Should contain RAG-generated insights.")
+
+        # Check if search_fn was called (at least for trend and SWOT opportunity)
+        self.assertTrue(self.mock_vector_search_fn.call_count >= 1)
+        # Example specific calls based on current InsightGenerator logic
+        self.mock_vector_search_fn.assert_any_call("What are the company's stated reasons or plans supporting the positive revenue trend of 'upward (strong)'?", k=1)
+        self.mock_vector_search_fn.assert_any_call("What specific actions or market conditions support the opportunity: 'New market segment Alpha'?", k=1)
+
+
+    def test_generate_insights_without_rag_search_fn(self):
+        """Test generate_insights when no vector_store_search_fn is provided."""
+        result = self.generator.generate_insights(
+            self.sample_financial_analysis,
+            self.sample_competitor_analysis,
+            self.sample_swot,
+            vector_store_search_fn=None # Explicitly None
         )
         self.assertIsInstance(result, list)
-        if result: # If list is not empty
-            self.assertIsInstance(result[0], str)
-        # Check if it returns the expected number of placeholder insights
-        # This depends on the dummy implementation, adjust if it changes
-        self.assertTrue(len(result) >= 3, "Should return a few placeholder insights.")
+        self.assertFalse(any("Insight (RAG):" in item for item in result), "Should not contain RAG-generated insights if search_fn is None.")
+        self.assertTrue(any("Insight (Base):" in item for item in result), "Should still contain base insights.")
+        self.assertEqual(self.mock_vector_search_fn.call_count, 0) # Ensure search_fn was not called
 
+
+    def test_generate_insights_rag_handles_no_retrieved_docs(self):
+        """Test RAG behavior when search_fn returns no documents."""
+        self.mock_vector_search_fn.return_value = [] # RAG returns nothing
+
+        result = self.generator.generate_insights(
+            self.sample_financial_analysis,
+            self.sample_competitor_analysis,
+            self.sample_swot,
+            self.mock_vector_search_fn
+        )
+        self.assertIsInstance(result, list)
+        # PlaceholderInsightRAGLLM will get "No specific context found..."
+        # Check that RAG insights reflect this
+        rag_insights = [item for item in result if "Insight (RAG):" in item]
+        self.assertTrue(len(rag_insights) > 0, "RAG insights should still be attempted.")
+        self.assertTrue(any("No specific context found" in item for item in rag_insights),
+                        "RAG insights should reflect no docs found if applicable.")
 
     def test_generate_insights_invalid_input_types(self):
-        """Test generate_insights with invalid input types."""
+        """Test generate_insights with invalid input types for main dicts."""
         with self.assertRaises(TypeError):
-            self.generator.generate_insights("bad", {}, {}) # type: ignore
+            self.generator.generate_insights("bad", {}, {}, self.mock_vector_search_fn) # type: ignore
         with self.assertRaises(TypeError):
-            self.generator.generate_insights({}, "bad", {}) # type: ignore
+            self.generator.generate_insights({}, "bad", {}, self.mock_vector_search_fn) # type: ignore
         with self.assertRaises(TypeError):
-            self.generator.generate_insights({}, {}, "bad") # type: ignore
-
-    def test_generate_insights_empty_inputs(self):
-        """Test generate_insights with empty dictionaries as inputs."""
-        try:
-            result = self.generator.generate_insights({}, {}, {})
-            self.assertIsInstance(result, list, "Should return a list even with empty inputs.")
-            # Depending on implementation, it might return an empty list or specific "no data" insights
-            # For current dummy, it returns the standard placeholder list.
-            self.assertTrue(len(result) > 0 if not result else True)
-        except Exception as e:
-            self.fail(f"generate_insights failed with empty dict inputs: {e}")
+            self.generator.generate_insights({}, {}, "bad", self.mock_vector_search_fn) # type: ignore
+        with self.assertRaises(TypeError): # Invalid search_fn
+            self.generator.generate_insights({}, {}, {}, "not_callable") # type: ignore
 
 
 if __name__ == '__main__':

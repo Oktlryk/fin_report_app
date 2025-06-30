@@ -1,76 +1,93 @@
 import unittest
 import os
+from unittest.mock import MagicMock
+from langchain_core.documents import Document # For creating mock search results
 
 try:
-    from farg.information_extraction.kpi_extractor import KPIExtractor
+    from farg.information_extraction.kpi_extractor import KPIExtractor, PlaceholderKPIRAGLLM
 except ImportError:
     import sys
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
-    from farg.information_extraction.kpi_extractor import KPIExtractor
+    from farg.information_extraction.kpi_extractor import KPIExtractor, PlaceholderKPIRAGLLM
 
-class TestKPIExtractor(unittest.TestCase):
+class TestKPIExtractorRAG(unittest.TestCase): # Renamed
     """
-    Unit tests for the KPIExtractor class.
+    Unit tests for the KPIExtractor class with RAG integration.
     """
 
     def setUp(self):
-        """Initialize the extractor for each test."""
+        """Initialize the extractor and mock search function for each test."""
         self.extractor = KPIExtractor()
+        self.mock_vector_search_fn = MagicMock()
+
         self.sample_parsed_data = {
-            "text": "Report text for KPI extraction...",
-            "parsed_sections": "some_sections"
+            "text": "Report text for KPI extraction... Revenue growth was driven by product X. Debt consists of bonds.",
+            "parsed_sections": {"md_and_a": "Management discussion on performance..."}
         }
         self.sample_financial_statements = {
-            "income_statement": "dummy_income_statement_data",
-            "balance_sheet": "dummy_balance_sheet_data",
-            "cash_flow_statement": "dummy_cash_flow_data"
+            "income_statement": {"revenue": 1000, "cogs": 400, "net_income": 150},
+            "balance_sheet": {"total_debt": 500, "total_equity": 1000, "current_assets": 200, "inventory": 50, "current_liabilities": 100}
         }
 
-    def test_import_kpi_extractor(self):
+    def test_import_and_instantiation(self):
         """Test that KPIExtractor can be imported and instantiated."""
         self.assertIsInstance(self.extractor, KPIExtractor)
+        self.assertIsInstance(self.extractor.llm, PlaceholderKPIRAGLLM)
 
-    def test_extract_kpis_returns_dict(self):
-        """Test that the method returns a dictionary."""
-        result = self.extractor.extract_kpis(self.sample_parsed_data, self.sample_financial_statements)
+    def test_extract_kpis_with_rag_uses_search_fn(self):
+        """Test that extract_kpis uses the vector_store_search_fn when provided."""
+
+        def mock_search_side_effect(query, k):
+            if "revenue growth drivers" in query.lower():
+                return [(Document(page_content="Product X was a major driver.", metadata={"source": "s1"}), 0.9)]
+            if "debt components" in query.lower():
+                return [(Document(page_content="Long-term bonds of $300M.", metadata={"source": "s2"}), 0.8)]
+            return []
+        self.mock_vector_search_fn.side_effect = mock_search_side_effect
+
+        result = self.extractor.extract_kpis(
+            self.sample_parsed_data,
+            self.sample_financial_statements,
+            self.mock_vector_search_fn
+        )
+
         self.assertIsInstance(result, dict)
+        # Check that search_fn was called for RAG-dependent KPIs
+        self.mock_vector_search_fn.assert_any_call(query="What were the main drivers of revenue growth in the past year?", k=2)
+        self.mock_vector_search_fn.assert_any_call(query="Describe the company's debt components or structure.", k=2)
 
-    def test_extract_kpis_has_expected_keys(self):
-        """Test that the returned dictionary has some expected KPI keys."""
-        result = self.extractor.extract_kpis(self.sample_parsed_data, self.sample_financial_statements)
-        # Check for a few representative placeholder KPIs
-        expected_kpis = [
-            "revenue_growth_yoy",
-            "net_profit_margin",
-            "debt_to_equity_ratio"
-        ]
-        for kpi_key in expected_kpis:
-            self.assertIn(kpi_key, result, f"KPI key '{kpi_key}' not found.")
-            self.assertTrue("placeholder" in result[kpi_key], f"Value for '{kpi_key}' should mention 'placeholder'.")
+        # Check if RAG-enhanced KPI details are present (using PlaceholderKPIRAGLLM's simulated output)
+        self.assertIn("Revenue growth driven by new product InnovateMax", result.get("revenue_growth_drivers_detail", ""))
+        self.assertIn("Debt primarily consists of long-term bonds", result.get("debt_structure_detail", ""))
 
-    def test_extract_kpis_invalid_parsed_data_input(self):
-        """Test with invalid parsed_report_data type."""
-        with self.assertRaises(TypeError):
-            self.extractor.extract_kpis("not_a_dict", self.sample_financial_statements) # type: ignore
-        with self.assertRaises(TypeError):
-            self.extractor.extract_kpis(None, self.sample_financial_statements) # type: ignore
+        # Check if direct calculation placeholders are still there
+        self.assertTrue("placeholder_v2_direct_calc" in result.get("net_profit_margin", ""))
 
-    def test_extract_kpis_invalid_financial_statements_input(self):
-        """Test with invalid financial_statements type."""
-        with self.assertRaises(TypeError):
-            self.extractor.extract_kpis(self.sample_parsed_data, "not_a_dict") # type: ignore
-        with self.assertRaises(TypeError):
-            self.extractor.extract_kpis(self.sample_parsed_data, None) # type: ignore
 
-    def test_extract_kpis_empty_inputs(self):
-        """Test with empty but valid dictionary inputs."""
-        try:
-            result = self.extractor.extract_kpis({}, {})
-            self.assertIsInstance(result, dict)
-            # Even with empty inputs, the dummy implementation returns all placeholders
-            self.assertIn("net_profit_margin", result)
-        except Exception as e:
-            self.fail(f"extract_kpis failed with empty dict inputs: {e}")
+    def test_extract_kpis_without_rag_search_fn(self):
+        """Test extract_kpis when no vector_store_search_fn is provided."""
+        result = self.extractor.extract_kpis(
+            self.sample_parsed_data,
+            self.sample_financial_statements,
+            None # No search function
+        )
+        self.assertIsInstance(result, dict)
+        self.assertEqual(self.mock_vector_search_fn.call_count, 0) # Ensure search_fn was not called
+
+        # RAG-dependent KPIs should have their default placeholder text
+        self.assertTrue("Placeholder - RAG not used" in result.get("revenue_growth_drivers_detail", ""))
+        self.assertTrue("Placeholder - RAG not used" in result.get("debt_structure_detail", ""))
+        self.assertTrue("placeholder_v2_direct_calc" in result.get("current_ratio", ""))
+
+
+    def test_extract_kpis_invalid_input_types(self):
+        """Test behavior with invalid input types for main arguments."""
+        with self.assertRaises(TypeError):
+            self.extractor.extract_kpis("bad_data", self.sample_financial_statements, self.mock_vector_search_fn) # type: ignore
+        with self.assertRaises(TypeError):
+            self.extractor.extract_kpis(self.sample_parsed_data, "bad_data", self.mock_vector_search_fn) # type: ignore
+        with self.assertRaises(TypeError):
+            self.extractor.extract_kpis(self.sample_parsed_data, self.sample_financial_statements, "not_callable") # type: ignore
 
 
 if __name__ == '__main__':

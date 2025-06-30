@@ -1,37 +1,43 @@
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, List, Dict, Any, Callable # Added Callable
 # from langgraph.graph import StatefulGraph, START, END # Commented out for now
+from langchain_core.documents import Document # For type hinting search results
 
 # Placeholder for an actual LLM or a more sophisticated local one
-# from farg.data_ingestion.report_parser import PlaceholderLLM # Assuming it's made accessible
-
 class PlaceholderFSLLM: # Specific placeholder for this extractor
     def invoke(self, input_dict: Dict[str, Any]) -> str:
-        text_section = input_dict.get("text_section", "")
-        # Simulate identifying statement type
-        if "income statement" in text_section.lower():
-            return "Identified as Income Statement. Content: " + text_section[:50] + "..."
-        elif "balance sheet" in text_section.lower():
-            return "Identified as Balance Sheet. Content: " + text_section[:50] + "..."
-        elif "cash flow" in text_section.lower():
-            return "Identified as Cash Flow Statement. Content: " + text_section[:50] + "..."
-        return "No specific financial statement identified in section: " + text_section[:50] + "..."
+        # context_text is from RAG, query is the original question for the statement type
+        context_text = input_dict.get("context_text", "")
+        query = input_dict.get("query", "")
+
+        # Simulate identifying statement type based on query and context
+        if "income statement" in query.lower():
+            return f"Extracted Income Statement from context: '{context_text[:100]}...' (Simulated RAG LLM)"
+        elif "balance sheet" in query.lower():
+            return f"Extracted Balance Sheet from context: '{context_text[:100]}...' (Simulated RAG LLM)"
+        elif "cash flow" in query.lower():
+            return f"Extracted Cash Flow from context: '{context_text[:100]}...' (Simulated RAG LLM)"
+        return f"No specific financial statement identified for query '{query}' from context: '{context_text[:70]}...' (Simulated RAG LLM)"
 
 class FinancialStatementExtractionState(TypedDict):
     """
     Represents the state of the financial statement extraction graph.
+    Now includes vector_store_search_fn for RAG.
     """
-    report_sections: List[str]  # Input: list of text sections from parsed report
-    extracted_statements: Dict[str, str]  # Output: {"income": "...", "balance": "...", "cash_flow": "..."}
-    current_section_index: int
+    parsed_report_data: Dict[str, Any] # Input: full parsed report for metadata or fallback
+    vector_store_search_fn: Callable[[str, int], List[tuple[Document, float]]] # Function for RAG searches
+
+    # For iterative processing if we choose to identify one statement type at a time
+    statement_types_to_extract: List[str] # e.g., ["income_statement", "balance_sheet", "cash_flow"]
+    current_statement_type_index: int
+
+    extracted_statements: Dict[str, str]  # Output: {"income_statement": "...", "balance_sheet": "...", ...}
     errors: List[str]
+
 
 class FinancialStatementExtractor:
     """
     Extracts financial statements (Income Statement, Balance Sheet, Cash Flow)
-    from parsed annual report data using a LangGraph workflow (simulated).
-
-    This class will use a graph-based approach to process different sections
-    of a report and identify relevant financial statements.
+    from parsed annual report data using a RAG-enhanced LangGraph workflow (simulated).
     """
 
     def __init__(self):
@@ -39,202 +45,183 @@ class FinancialStatementExtractor:
         Initializes the FinancialStatementExtractor.
         Defines graph node functions and the graph structure (commented out).
         """
-        self.llm = PlaceholderFSLLM() # Using a specific placeholder for this task
-        print("FinancialStatementExtractor initialized with PlaceholderFSLLM.")
-
-        # --- Define Node Functions ---
-        # These would typically be methods or standalone functions.
-        # For simplicity in this step, their logic is sketched out here.
-
-        # self.workflow = StatefulGraph(FinancialStatementExtractionState) # Commented out
-
-        # self.workflow.add_node("start_extraction", self.start_extraction_node)
-        # self.workflow.add_node("extract_section", self.extract_section_node)
-        # # self.workflow.add_node("error_handler", self.error_node) # Optional
-
-        # self.workflow.add_edge(START, "start_extraction")
-        # self.workflow.add_edge("start_extraction", "extract_section")
-        # self.workflow.add_conditional_edge(
-        #     "extract_section",
-        #     self.should_continue_extraction_edge,
-        #     {
-        #         "extract_next_section": "extract_section",
-        #         "end_extraction": END
-        #     }
-        # )
-        # try:
-        #   self.app = self.workflow.compile()
-        #   print("LangGraph workflow compiled for FinancialStatementExtractor.")
-        # except Exception as e:
-        #   print(f"Could not compile LangGraph workflow (likely due to missing library, this is expected for now): {e}")
-        #   self.app = None
-        self.app = None # Explicitly None as graph is commented out
+        self.llm = PlaceholderFSLLM()
+        print("FinancialStatementExtractor initialized with RAG-aware PlaceholderFSLLM.")
+        self.app = None
         print("LangGraph workflow definition outlined but not compiled (as LangGraph library might not be installed).")
 
-
+    # --- Graph Node Definitions (Conceptual for LangGraph) ---
     def start_extraction_node(self, state: FinancialStatementExtractionState) -> FinancialStatementExtractionState:
-        """
-        Initializes the extraction process.
-        """
         print("Node: start_extraction_node called.")
         state["extracted_statements"] = {}
         state["errors"] = []
-        state["current_section_index"] = 0 # Ensure index is initialized
+        # Define the order of statements to look for if processing iteratively
+        state["statement_types_to_extract"] = ["income_statement", "balance_sheet", "cash_flow_statement"]
+        state["current_statement_type_index"] = 0
         return state
 
-    def extract_section_node(self, state: FinancialStatementExtractionState) -> FinancialStatementExtractionState:
+    def extract_single_statement_node(self, state: FinancialStatementExtractionState) -> FinancialStatementExtractionState:
         """
-        Processes the current report section to identify and extract financial statements.
+        Uses RAG to find and extract the current statement type.
         """
-        print(f"Node: extract_section_node called for section index {state['current_section_index']}.")
+        current_type_idx = state["current_statement_type_index"]
+        statement_type_to_find = state["statement_types_to_extract"][current_type_idx]
+
+        print(f"Node: extract_single_statement_node for type: {statement_type_to_find}")
+        search_fn = state["vector_store_search_fn"]
+
+        # Formulate a query for RAG
+        query = f"Retrieve text sections related to the {statement_type_to_find.replace('_', ' ')}."
+        print(f"  RAG Query: {query}")
+
         try:
-            current_section_text = state["report_sections"][state["current_section_index"]]
+            retrieved_docs_with_scores = search_fn(query=query, k=3) # Get top 3 chunks
 
-            # Simulate LLM call or rule-based logic to identify statement type
-            # For this simulation, using a simple string search within the placeholder LLM
-            llm_output = self.llm.invoke({"text_section": current_section_text})
-
-            if "Income Statement" in llm_output:
-                state["extracted_statements"]["income_statement"] = state["extracted_statements"].get("income_statement","") + llm_output + "\n"
-            elif "Balance Sheet" in llm_output:
-                state["extracted_statements"]["balance_sheet"] = state["extracted_statements"].get("balance_sheet","") + llm_output + "\n"
-            elif "Cash Flow Statement" in llm_output:
-                state["extracted_statements"]["cash_flow_statement"] = state["extracted_statements"].get("cash_flow_statement","") + llm_output + "\n"
+            retrieved_texts = []
+            if retrieved_docs_with_scores:
+                for doc, score in retrieved_docs_with_scores:
+                    retrieved_texts.append(doc.page_content)
+                    print(f"    - Retrieved chunk (score {score:.2f}): '{doc.page_content[:70]}...'")
             else:
-                # Could log sections not identified as a specific statement
-                pass
+                print(f"    - No documents retrieved for {statement_type_to_find}.")
 
-            state["current_section_index"] += 1
-        except IndexError:
-            state["errors"].append("Attempted to access section out of bounds.")
+            concatenated_retrieved_text = "\n\n---\n\n".join(retrieved_texts) if retrieved_texts else "No relevant information found in documents."
+
+            # Simulate LLM call to "extract" the statement from the retrieved context
+            llm_output = self.llm.invoke({
+                "query": statement_type_to_find, # Pass the original query for context
+                "context_text": concatenated_retrieved_text
+            })
+            state["extracted_statements"][statement_type_to_find] = llm_output
+            print(f"    - LLM Simulated Extraction for '{statement_type_to_find}': '{llm_output[:100]}...'")
+
         except Exception as e:
-            state["errors"].append(f"Error in extract_section_node: {str(e)}")
+            error_msg = f"Error during RAG extraction for {statement_type_to_find}: {str(e)}"
+            print(error_msg)
+            state["errors"].append(error_msg)
+            state["extracted_statements"][statement_type_to_find] = f"Error extracting {statement_type_to_find}."
+
+        state["current_statement_type_index"] += 1
         return state
 
-    def should_continue_extraction_edge(self, state: FinancialStatementExtractionState) -> str:
+    def should_continue_statement_type_edge(self, state: FinancialStatementExtractionState) -> str:
         """
-        Determines if there are more sections to process.
+        Determines if there are more statement types to extract.
         """
-        print(f"Edge: should_continue_extraction_edge called. Index: {state['current_section_index']}, Total Sections: {len(state['report_sections'])}")
-        if state["current_section_index"] < len(state["report_sections"]):
-            return "extract_next_section"
-        return "end_extraction"
+        print(f"Edge: should_continue_statement_type_edge. Index: {state['current_statement_type_index']}, Total Types: {len(state['statement_types_to_extract'])}")
+        if state["current_statement_type_index"] < len(state["statement_types_to_extract"]):
+            return "extract_next_statement_type" # Route to extract_single_statement_node
+        return END # type: ignore # LangGraph's END sentinel
 
-    # def error_node(self, state: FinancialStatementExtractionState, error_message: str) -> FinancialStatementExtractionState:
-    #     """Appends an error message to the state."""
-    #     state["errors"].append(error_message)
-    #     return state
-
-    def extract_financial_statements(self, parsed_report_data: dict) -> dict:
+    def extract_financial_statements(self, parsed_report_data: dict, vector_store_search_fn: Callable = None) -> dict: # type: ignore
         """
-        Extracts key financial statements using the (simulated) LangGraph workflow.
+        Extracts key financial statements using RAG (simulated LangGraph workflow).
 
         Args:
-            parsed_report_data: A dictionary containing the parsed content of
-                                an annual report. Expected to have a "text" key,
-                                or ideally pre-segmented "parsed_sections" (e.g., from ReportParser).
+            parsed_report_data: Dictionary with parsed report content.
+            vector_store_search_fn: Callable for RAG search (e.g., vector_store_manager.search).
 
         Returns:
-            A dictionary with extracted statements, indicating LangGraph simulation.
+            A dictionary with extracted statements.
         """
         if not isinstance(parsed_report_data, dict):
             raise TypeError("parsed_report_data must be a dictionary.")
+        if vector_store_search_fn and not callable(vector_store_search_fn):
+            raise TypeError("vector_store_search_fn must be callable if provided.")
 
-        print("Simulating financial statement extraction using LangGraph structure.")
+        print("Simulating financial statement extraction using RAG-enhanced LangGraph structure.")
 
-        # Prepare initial state for the graph
-        # Ideally, parsed_report_data would have a list of text sections.
-        # For now, we can simulate this by splitting the main text or using placeholder sections.
-        report_text = parsed_report_data.get("text", "")
-        # Simple split by double newline as a basic way to get "sections" for simulation
-        simulated_sections = [sec for sec in report_text.split("\n\n") if sec.strip()]
-        if not simulated_sections and report_text: # If no double newlines, use whole text as one section
-            simulated_sections = [report_text]
-        elif not simulated_sections:
-             simulated_sections = ["No text content provided for sectioning."]
-
+        if not vector_store_search_fn:
+            # Fallback or error if RAG is essential
+            print("Warning: vector_store_search_fn not provided. Returning basic placeholders.")
+            return {
+                "income_statement": "Placeholder - RAG search function not provided",
+                "balance_sheet": "Placeholder - RAG search function not provided",
+                "cash_flow_statement": "Placeholder - RAG search function not provided",
+                "notes_to_financial_statements": "Placeholder - Notes",
+                "graph_simulation_errors": ["vector_store_search_fn was None"]
+            }
 
         initial_graph_state: FinancialStatementExtractionState = {
-            "report_sections": simulated_sections[:5], # Limit sections for brevity in simulation
+            "parsed_report_data": parsed_report_data,
+            "vector_store_search_fn": vector_store_search_fn,
+            "statement_types_to_extract": [], # Will be set by start_node
+            "current_statement_type_index": 0,
             "extracted_statements": {},
-            "current_section_index": 0,
             "errors": []
         }
 
-        if self.app:
-            # final_state = self.app.invoke(initial_graph_state) # Actual graph invocation
-            # print(f"Simulated LangGraph final state: {final_state}")
-            # For now, manually simulate a few steps of the graph for demonstration
-            print("Simulating manual graph invocation as self.app is likely None (LangGraph not compiled).")
+        if self.app: # If LangGraph app was compiled
+            # final_state = self.app.invoke(initial_graph_state)
+            # For now, simulate the graph run manually as self.app is None
+            print("Simulating manual graph invocation (as self.app is likely None).")
             current_state = self.start_extraction_node(initial_graph_state)
-            while self.should_continue_extraction_edge(current_state) == "extract_next_section":
-                current_state = self.extract_section_node(current_state)
+            while self.should_continue_statement_type_edge(current_state) != END: # type: ignore
+                current_state = self.extract_single_statement_node(current_state)
+
             final_simulated_statements = current_state.get("extracted_statements", {})
             final_errors = current_state.get("errors", [])
-            print(f"Simulated graph run complete. Statements: {final_simulated_statements.keys()}, Errors: {final_errors}")
+            print(f"Simulated RAG graph run complete. Statements found: {list(final_simulated_statements.keys())}, Errors: {final_errors}")
 
             return {
-                "income_statement": final_simulated_statements.get("income_statement", "Placeholder - Extracted via LangGraph (simulated run)"),
-                "balance_sheet": final_simulated_statements.get("balance_sheet", "Placeholder - Extracted via LangGraph (simulated run)"),
-                "cash_flow_statement": final_simulated_statements.get("cash_flow_statement", "Placeholder - Extracted via LangGraph (simulated run)"),
-                "notes_to_financial_statements": "Placeholder - Notes (simulated run)",
+                "income_statement": final_simulated_statements.get("income_statement", "Not found or error during RAG."),
+                "balance_sheet": final_simulated_statements.get("balance_sheet", "Not found or error during RAG."),
+                "cash_flow_statement": final_simulated_statements.get("cash_flow_statement", "Not found or error during RAG."),
+                "notes_to_financial_statements": "Placeholder - Notes (RAG for notes TBD)",
                 "graph_simulation_errors": final_errors
             }
-        else:
-            print("LangGraph self.app not compiled. Returning basic placeholders.")
+        else: # Fallback if self.app is not compiled (current state of the code)
+            print("LangGraph self.app not compiled. Manually calling RAG-based node logic for simulation.")
+            current_state = self.start_extraction_node(initial_graph_state)
+            while current_state["current_statement_type_index"] < len(current_state["statement_types_to_extract"]):
+                current_state = self.extract_single_statement_node(current_state)
+
+            final_simulated_statements = current_state.get("extracted_statements", {})
+            final_errors = current_state.get("errors", [])
             return {
-                "income_statement": "Placeholder - LangGraph app not compiled",
-                "balance_sheet": "Placeholder - LangGraph app not compiled",
-                "cash_flow_statement": "Placeholder - LangGraph app not compiled",
-                "notes_to_financial_statements": "Placeholder - LangGraph app not compiled",
-                "graph_simulation_errors": ["self.app was None"]
+                "income_statement": final_simulated_statements.get("income_statement", "Simulated: Not found via RAG"),
+                "balance_sheet": final_simulated_statements.get("balance_sheet", "Simulated: Not found via RAG"),
+                "cash_flow_statement": final_simulated_statements.get("cash_flow_statement", "Simulated: Not found via RAG"),
+                "notes_to_financial_statements": "Placeholder - Notes (RAG for notes TBD)",
+                "graph_simulation_errors": final_errors + ["self.app was None, manual RAG simulation"]
             }
 
 
 if __name__ == '__main__':
-    print("Starting example usage of FinancialStatementExtractor with LangGraph outline...")
+    print("Starting example usage of FinancialStatementExtractor with RAG-LangGraph outline...")
+
+    # Mock vector_store_search_fn for example usage
+    def mock_rag_search_fn(query: str, k: int) -> list[tuple[Document, float]]:
+        print(f"  Mock RAG Search: Query='{query}', k={k}")
+        if "income statement" in query.lower():
+            return [(Document(page_content="This document discusses revenue and expenses, forming the income statement.", metadata={"source":"doc1_secA"}), 0.9)]
+        elif "balance sheet" in query.lower():
+            return [(Document(page_content="Assets include cash and inventory. Liabilities are also listed here on the balance sheet.", metadata={"source":"doc1_secB"}), 0.88)]
+        # No mock for cash flow to test "not found"
+        return []
+
     extractor = FinancialStatementExtractor()
+    sample_parsed_data = {"text": "Full annual report text..."}
 
-    sample_report_text_complex = (
-        "Company Inc. Annual Report 2023.\n\n"
-        "Forward Looking Statements.\n\n"
-        "Consolidated Income Statement\nRevenue: $1,000,000\nCOGS: $400,000\nGross Profit: $600,000\nThis is part of the income statement.\n\n"
-        "Report of Independent Auditors.\n\n"
-        "Consolidated Balance Sheet\nAssets: $5,000,000\nLiabilities: $2,000,000\nEquity: $3,000,000\nDetails of the balance sheet items.\n\n"
-        "Consolidated Statement of Cash Flow\nOperating Activities: $500,000\nInvesting Activities: -$200,000\nFinancing Activities: -$100,000\nThis describes cash flow.\n\n"
-        "Notes to Financial Statements\nNote 1: Accounting Policies..."
-    )
-    sample_parsed_data_complex = {"text": sample_report_text_complex}
-
-    sample_parsed_data_simple = {"text": "This report contains an income statement showing revenue of 100."}
-
-
-    print("\n--- Extracting from complex parsed data (simulating LangGraph) ---")
+    print("\n--- Extracting financial statements (simulating RAG and LangGraph) ---")
     try:
-        statements_complex = extractor.extract_financial_statements(sample_parsed_data_complex)
-        print("\nSuccessfully extracted (simulated LangGraph). Output:")
-        for key, value in statements_complex.items():
-            if key == "graph_simulation_errors" and not value: continue # Don't print empty errors list
-            print(f"  {key}: {str(value)[:200] + '...' if isinstance(value, str) and len(value) > 200 else value}")
-    except Exception as e:
-        print(f"Error during extraction: {e}")
-
-    print("\n--- Extracting from simple parsed data (simulating LangGraph) ---")
-    try:
-        statements_simple = extractor.extract_financial_statements(sample_parsed_data_simple)
-        print("\nSuccessfully extracted (simulated LangGraph). Output:")
-        for key, value in statements_simple.items():
+        statements = extractor.extract_financial_statements(sample_parsed_data, mock_rag_search_fn)
+        print("\nSuccessfully extracted (simulated RAG/LangGraph). Output:")
+        for key, value in statements.items():
             if key == "graph_simulation_errors" and not value: continue
             print(f"  {key}: {str(value)[:200] + '...' if isinstance(value, str) and len(value) > 200 else value}")
     except Exception as e:
         print(f"Error during extraction: {e}")
 
-    print("\n--- Testing with invalid input type ---")
+    print("\n--- Testing with no RAG search function (should use fallback) ---")
     try:
-        extractor.extract_financial_statements("this is not a dict") # type: ignore
-    except TypeError as e:
-        print(f"Correctly caught expected error: {e}")
+        statements_no_rag = extractor.extract_financial_statements(sample_parsed_data, None) # type: ignore
+        print("\nOutput with no RAG function (simulated RAG/LangGraph):")
+        for key, value in statements_no_rag.items():
+             if key == "graph_simulation_errors" and not value: continue
+             print(f"  {key}: {str(value)[:200] + '...' if isinstance(value, str) and len(value) > 200 else value}")
+        self.assertTrue("RAG search function not provided" in statements_no_rag["income_statement"]) # From unittest if run here
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"Error (expected for None search_fn if not handled gracefully by test): {e}")
 
-    print("\nExample usage of FinancialStatementExtractor with LangGraph outline complete.")
+    print("\nExample usage of FinancialStatementExtractor with RAG-LangGraph outline complete.")

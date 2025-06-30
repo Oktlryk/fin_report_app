@@ -82,6 +82,7 @@ outputs = [
     gr.Textbox(label="Generated FARG Report", lines=30, show_copy_button=True, max_lines=50) # Increased lines
 ]
 
+# Ensure 'demo' is defined at the module level for main.py to import
 demo = gr.Interface(
     fn=run_farg_analysis_gradio, # Updated function call
     inputs=inputs,
@@ -101,15 +102,16 @@ demo = gr.Interface(
     # ]
 )
 
-if __name__ == "__main__":
-    print("Launching Gradio UI for FARG (Agent Integrated)...")
-    # Ensure dummy files for examples exist if examples are uncommented and point to local paths.
-    # This is mainly for testing the UI's ability to pass file paths to the agent.
-    # The agent itself has its own dummy file creation in its __main__ block for self-testing.
+# The following block should be removed or commented out if main.py is the primary entry point.
+# if __name__ == "__main__":
+#     print("Launching Gradio UI for FARG (Agent Integrated) directly from app.py...")
+#     # Ensure dummy files for examples exist if examples are uncommented and point to local paths.
+#     # This is mainly for testing the UI's ability to pass file paths to the agent.
+#     # The agent itself has its own dummy file creation in its __main__ block for self-testing.
 
-    # For the UI examples to work without manual upload, files need to be accessible by Gradio.
-    # This might involve placing them in a specific directory or using Gradio's caching for examples.
-    # For now, manual upload is the primary way.
+#     # For the UI examples to work without manual upload, files need to be accessible by Gradio.
+#     # This might involve placing them in a specific directory or using Gradio's caching for examples.
+#     # For now, manual upload is the primary way.
 
-    demo.launch()
-    print("Gradio UI closed.")
+#     demo.launch()
+#     print("Gradio UI closed.")
